@@ -10,7 +10,17 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
-// Health check
+// Health check COM teste de banco - ANTES de tudo
+app.get('/mcp/health', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT 1 as ok')
+    res.json({ status: 'ok', db: result.rows[0] })
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message })
+  }
+})
+
+// Health check simples
 app.get('/mcp', (req, res) => {
   res.status(200).json({ status: 'ok', server: 'Postgres MCP' })
 })
@@ -18,11 +28,14 @@ app.get('/mcp', (req, res) => {
 app.post('/mcp', async (req, res) => {
   const { id, method, params } = req.body
 
-  // Sempre responde como JSON-RPC [porque o Claude.ai aceita tanto SSE quanto JSON direto,
-  // mas JSON é mais estável pra esse tipo de server]
+  console.log('REQUEST:', method, JSON.stringify(params || {}).substring(0, 200))
+
   res.setHeader('Content-Type', 'application/json')
 
-  const send = (payload) => res.json(payload)
+  const send = (payload) => {
+    console.log('RESPONSE:', method, JSON.stringify(payload).substring(0, 300))
+    return res.json(payload)
+  }
 
   try {
     // Initialize - sem auth
@@ -46,6 +59,7 @@ app.post('/mcp', async (req, res) => {
     // Auth pra tudo depois do initialize
     const token = req.query.token
     if (token !== process.env.SECRET_TOKEN) {
+      console.log('AUTH FAILED - token recebido:', token ? 'presente mas incorreto' : 'ausente')
       return send({
         jsonrpc: '2.0',
         id,
@@ -66,13 +80,13 @@ app.post('/mcp', async (req, res) => {
           tools: [
             {
               name: 'sql_select',
-              description: 'Execute SELECT query (read-only) on PostgreSQL database',
+              description: 'Execute SELECT query (read-only) on PostgreSQL database. Use this to query any table. Start with: SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\'',
               inputSchema: {
                 type: 'object',
                 properties: {
                   sql: {
                     type: 'string',
-                    description: 'SQL SELECT query to execute'
+                    description: 'SQL SELECT query to execute. Only SELECT statements are allowed.'
                   }
                 },
                 required: ['sql']
@@ -84,6 +98,8 @@ app.post('/mcp', async (req, res) => {
     }
 
     if (method === 'tools/call') {
+      console.log('TOOL CALL:', JSON.stringify(params, null, 2))
+
       const { name, arguments: args } = params
 
       if (name !== 'sql_select') {
@@ -108,7 +124,11 @@ app.post('/mcp', async (req, res) => {
         sql += ' LIMIT 100'
       }
 
+      console.log('EXECUTING SQL:', sql)
+
       const result = await pool.query(sql)
+
+      console.log('SQL OK - rows:', result.rows.length)
 
       return send({
         jsonrpc: '2.0',
@@ -131,11 +151,11 @@ app.post('/mcp', async (req, res) => {
     })
 
   } catch (err) {
-    console.error('MCP Error:', err.message)
+    console.error('MCP ERROR:', err.message, err.stack)
     return send({
       jsonrpc: '2.0',
       id,
-      error: { code: -32001, message: err.message || 'Internal error' }
+      error: { code: -32001, message: 'DB Error: ' + err.message }
     })
   }
 })
