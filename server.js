@@ -10,14 +10,31 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
-/**
- * ✅ Permite GET para healthcheck do Claude
- */
 app.get('/mcp', (req, res) => {
   res.status(200).send('MCP Server Running')
 })
 
 app.post('/mcp', async (req, res) => {
+
+  const acceptsSSE = req.headers.accept?.includes('text/event-stream')
+
+  if (acceptsSSE) {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+  } else {
+    res.setHeader('Content-Type', 'application/json')
+  }
+
+  const send = (payload) => {
+    if (acceptsSSE) {
+      res.write(`event: message\n`)
+      res.write(`data: ${JSON.stringify(payload)}\n\n`)
+      res.end()
+    } else {
+      res.json(payload)
+    }
+  }
 
   const { id, method, params } = req.body
 
@@ -25,7 +42,7 @@ app.post('/mcp', async (req, res) => {
 
     // 🔹 Initialize (não exige token)
     if (method === "initialize") {
-      return res.json({
+      return send({
         jsonrpc: "2.0",
         id,
         result: {
@@ -40,19 +57,18 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    // 🔒 Exige token APÓS initialize
+    // 🔒 Token após initialize
     const token = req.query.token
     if (token !== process.env.SECRET_TOKEN) {
-      return res.json({
+      return send({
         jsonrpc: "2.0",
         id,
         error: { code: -32098, message: "Unauthorized" }
       })
     }
 
-    // 🔹 List Tools
     if (method === "tools/list") {
-      return res.json({
+      return send({
         jsonrpc: "2.0",
         id,
         result: {
@@ -63,10 +79,7 @@ app.post('/mcp', async (req, res) => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  sql: {
-                    type: "string",
-                    description: "SQL SELECT query"
-                  }
+                  sql: { type: "string" }
                 },
                 required: ["sql"]
               }
@@ -76,13 +89,12 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    // 🔹 Call Tool
     if (method === "tools/call") {
 
       const { name, arguments: args } = params
 
       if (name !== "sql_select") {
-        return res.json({
+        return send({
           jsonrpc: "2.0",
           id,
           error: { code: -32601, message: "Tool not found" }
@@ -92,13 +104,10 @@ app.post('/mcp', async (req, res) => {
       let sql = args?.sql
 
       if (!sql || !sql.trim().toLowerCase().startsWith("select")) {
-        return res.json({
+        return send({
           jsonrpc: "2.0",
           id,
-          error: {
-            code: -32000,
-            message: "Only SELECT queries are allowed"
-          }
+          error: { code: -32000, message: "Only SELECT allowed" }
         })
       }
 
@@ -108,7 +117,7 @@ app.post('/mcp', async (req, res) => {
 
       const result = await pool.query(sql)
 
-      return res.json({
+      return send({
         jsonrpc: "2.0",
         id,
         result: {
@@ -122,7 +131,7 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    return res.json({
+    return send({
       jsonrpc: "2.0",
       id,
       error: { code: -32601, message: "Method not found" }
@@ -130,7 +139,7 @@ app.post('/mcp', async (req, res) => {
 
   } catch (err) {
     console.error(err)
-    return res.json({
+    return send({
       jsonrpc: "2.0",
       id,
       error: { code: -32001, message: "Internal error" }
