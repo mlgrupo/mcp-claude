@@ -10,78 +10,72 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
+// Health check
 app.get('/mcp', (req, res) => {
-  res.status(200).send('MCP Server Running')
+  res.status(200).json({ status: 'ok', server: 'Postgres MCP' })
 })
 
 app.post('/mcp', async (req, res) => {
-
-  const acceptsSSE = req.headers.accept?.includes('text/event-stream')
-
-  if (acceptsSSE) {
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
-  } else {
-    res.setHeader('Content-Type', 'application/json')
-  }
-
-  const send = (payload) => {
-    if (acceptsSSE) {
-      res.write(`event: message\n`)
-      res.write(`data: ${JSON.stringify(payload)}\n\n`)
-      res.end()
-    } else {
-      res.json(payload)
-    }
-  }
-
   const { id, method, params } = req.body
 
-  try {
+  // Sempre responde como JSON-RPC [porque o Claude.ai aceita tanto SSE quanto JSON direto,
+  // mas JSON é mais estável pra esse tipo de server]
+  res.setHeader('Content-Type', 'application/json')
 
-    // 🔹 Initialize (não exige token)
-    if (method === "initialize") {
+  const send = (payload) => res.json(payload)
+
+  try {
+    // Initialize - sem auth
+    if (method === 'initialize') {
       return send({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id,
         result: {
+          protocolVersion: '2024-11-05',
           capabilities: {
             tools: {}
           },
           serverInfo: {
-            name: "Postgres MCP",
-            version: "1.0.0"
+            name: 'Postgres MCP',
+            version: '1.0.0'
           }
         }
       })
     }
 
-    // 🔒 Token após initialize
+    // Auth pra tudo depois do initialize
     const token = req.query.token
     if (token !== process.env.SECRET_TOKEN) {
       return send({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id,
-        error: { code: -32098, message: "Unauthorized" }
+        error: { code: -32098, message: 'Unauthorized' }
       })
     }
 
-    if (method === "tools/list") {
+    // notifications/initialized - Claude manda isso após initialize
+    if (method === 'notifications/initialized') {
+      return res.status(204).end()
+    }
+
+    if (method === 'tools/list') {
       return send({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id,
         result: {
           tools: [
             {
-              name: "sql_select",
-              description: "Execute SELECT query (read-only)",
+              name: 'sql_select',
+              description: 'Execute SELECT query (read-only) on PostgreSQL database',
               inputSchema: {
-                type: "object",
+                type: 'object',
                 properties: {
-                  sql: { type: "string" }
+                  sql: {
+                    type: 'string',
+                    description: 'SQL SELECT query to execute'
+                  }
                 },
-                required: ["sql"]
+                required: ['sql']
               }
             }
           ]
@@ -89,41 +83,40 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    if (method === "tools/call") {
-
+    if (method === 'tools/call') {
       const { name, arguments: args } = params
 
-      if (name !== "sql_select") {
+      if (name !== 'sql_select') {
         return send({
-          jsonrpc: "2.0",
+          jsonrpc: '2.0',
           id,
-          error: { code: -32601, message: "Tool not found" }
+          error: { code: -32601, message: 'Tool not found' }
         })
       }
 
       let sql = args?.sql
 
-      if (!sql || !sql.trim().toLowerCase().startsWith("select")) {
+      if (!sql || !sql.trim().toLowerCase().startsWith('select')) {
         return send({
-          jsonrpc: "2.0",
+          jsonrpc: '2.0',
           id,
-          error: { code: -32000, message: "Only SELECT allowed" }
+          error: { code: -32000, message: 'Only SELECT allowed' }
         })
       }
 
-      if (!sql.toLowerCase().includes("limit")) {
-        sql += " LIMIT 100"
+      if (!sql.toLowerCase().includes('limit')) {
+        sql += ' LIMIT 100'
       }
 
       const result = await pool.query(sql)
 
       return send({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id,
         result: {
           content: [
             {
-              type: "text",
+              type: 'text',
               text: JSON.stringify(result.rows, null, 2)
             }
           ]
@@ -132,21 +125,21 @@ app.post('/mcp', async (req, res) => {
     }
 
     return send({
-      jsonrpc: "2.0",
+      jsonrpc: '2.0',
       id,
-      error: { code: -32601, message: "Method not found" }
+      error: { code: -32601, message: 'Method not found' }
     })
 
   } catch (err) {
-    console.error(err)
+    console.error('MCP Error:', err.message)
     return send({
-      jsonrpc: "2.0",
+      jsonrpc: '2.0',
       id,
-      error: { code: -32001, message: "Internal error" }
+      error: { code: -32001, message: err.message || 'Internal error' }
     })
   }
 })
 
-app.listen(process.env.PORT, () => {
-  console.log(`🚀 MCP Server rodando na porta ${process.env.PORT}`)
+app.listen(process.env.PORT || 3000, () => {
+  console.log(`MCP Server rodando na porta ${process.env.PORT || 3000}`)
 })
