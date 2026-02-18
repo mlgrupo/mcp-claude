@@ -10,19 +10,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
-// 🔐 Endpoint MCP
 app.post('/mcp', async (req, res) => {
 
-  // 🔒 Autenticação via query param
   const token = req.query.token
   if (token !== process.env.SECRET_TOKEN) {
     return res.status(401).json({
       jsonrpc: "2.0",
       id: null,
-      error: {
-        code: -32098,
-        message: "Unauthorized"
-      }
+      error: { code: -32098, message: "Unauthorized" }
     })
   }
 
@@ -30,29 +25,65 @@ app.post('/mcp', async (req, res) => {
 
   try {
 
-    // 🔹 Handshake inicial
-    if (method === 'initialize') {
+    // 🔹 1️⃣ Initialize
+    if (method === "initialize") {
       return res.json({
         jsonrpc: "2.0",
         id,
         result: {
           capabilities: {
-            tools: true
+            tools: {}
           },
           serverInfo: {
-            name: "Postgres MCP Server",
+            name: "Postgres MCP",
             version: "1.0.0"
           }
         }
       })
     }
 
-    // 🔹 Query SQL
-    if (method === 'query') {
+    // 🔹 2️⃣ List Tools
+    if (method === "tools/list") {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          tools: [
+            {
+              name: "sql_select",
+              description: "Execute a SELECT query on PostgreSQL (read-only)",
+              inputSchema: {
+                type: "object",
+                properties: {
+                  sql: {
+                    type: "string",
+                    description: "SQL SELECT query"
+                  }
+                },
+                required: ["sql"]
+              }
+            }
+          ]
+        }
+      })
+    }
 
-      let sql = params?.sql
+    // 🔹 3️⃣ Call Tool
+    if (method === "tools/call") {
 
-      if (!sql || !sql.trim().toLowerCase().startsWith('select')) {
+      const { name, arguments: args } = params
+
+      if (name !== "sql_select") {
+        return res.json({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32601, message: "Tool not found" }
+        })
+      }
+
+      let sql = args?.sql
+
+      if (!sql || !sql.trim().toLowerCase().startsWith("select")) {
         return res.json({
           jsonrpc: "2.0",
           id,
@@ -63,9 +94,9 @@ app.post('/mcp', async (req, res) => {
         })
       }
 
-      // 🔐 Limita resultados se não tiver LIMIT
-      if (!sql.toLowerCase().includes('limit')) {
-        sql += ' LIMIT 100'
+      // adiciona limite automático
+      if (!sql.toLowerCase().includes("limit")) {
+        sql += " LIMIT 100"
       }
 
       const result = await pool.query(sql)
@@ -74,7 +105,12 @@ app.post('/mcp', async (req, res) => {
         jsonrpc: "2.0",
         id,
         result: {
-          rows: result.rows
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(result.rows, null, 2)
+            }
+          ]
         }
       })
     }
@@ -83,10 +119,7 @@ app.post('/mcp', async (req, res) => {
     return res.json({
       jsonrpc: "2.0",
       id,
-      error: {
-        code: -32601,
-        message: "Method not found"
-      }
+      error: { code: -32601, message: "Method not found" }
     })
 
   } catch (err) {
@@ -95,10 +128,7 @@ app.post('/mcp', async (req, res) => {
     return res.json({
       jsonrpc: "2.0",
       id,
-      error: {
-        code: -32001,
-        message: "Internal server error"
-      }
+      error: { code: -32001, message: "Internal server error" }
     })
   }
 })
