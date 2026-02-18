@@ -10,22 +10,20 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
-app.post('/mcp', async (req, res) => {
+/**
+ * ✅ Permite GET para healthcheck do Claude
+ */
+app.get('/mcp', (req, res) => {
+  res.status(200).send('MCP Server Running')
+})
 
-  const token = req.query.token
-  if (token !== process.env.SECRET_TOKEN) {
-    return res.status(401).json({
-      jsonrpc: "2.0",
-      id: null,
-      error: { code: -32098, message: "Unauthorized" }
-    })
-  }
+app.post('/mcp', async (req, res) => {
 
   const { id, method, params } = req.body
 
   try {
 
-    // 🔹 1️⃣ Initialize
+    // 🔹 Initialize (não exige token)
     if (method === "initialize") {
       return res.json({
         jsonrpc: "2.0",
@@ -42,7 +40,17 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    // 🔹 2️⃣ List Tools
+    // 🔒 Exige token APÓS initialize
+    const token = req.query.token
+    if (token !== process.env.SECRET_TOKEN) {
+      return res.json({
+        jsonrpc: "2.0",
+        id,
+        error: { code: -32098, message: "Unauthorized" }
+      })
+    }
+
+    // 🔹 List Tools
     if (method === "tools/list") {
       return res.json({
         jsonrpc: "2.0",
@@ -51,7 +59,7 @@ app.post('/mcp', async (req, res) => {
           tools: [
             {
               name: "sql_select",
-              description: "Execute a SELECT query on PostgreSQL (read-only)",
+              description: "Execute SELECT query (read-only)",
               inputSchema: {
                 type: "object",
                 properties: {
@@ -68,7 +76,7 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    // 🔹 3️⃣ Call Tool
+    // 🔹 Call Tool
     if (method === "tools/call") {
 
       const { name, arguments: args } = params
@@ -94,7 +102,6 @@ app.post('/mcp', async (req, res) => {
         })
       }
 
-      // adiciona limite automático
       if (!sql.toLowerCase().includes("limit")) {
         sql += " LIMIT 100"
       }
@@ -115,7 +122,6 @@ app.post('/mcp', async (req, res) => {
       })
     }
 
-    // 🔹 Método não suportado
     return res.json({
       jsonrpc: "2.0",
       id,
@@ -124,11 +130,10 @@ app.post('/mcp', async (req, res) => {
 
   } catch (err) {
     console.error(err)
-
     return res.json({
       jsonrpc: "2.0",
       id,
-      error: { code: -32001, message: "Internal server error" }
+      error: { code: -32001, message: "Internal error" }
     })
   }
 })
