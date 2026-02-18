@@ -10,20 +10,26 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 })
 
-// Middleware de autenticação
-app.use((req, res, next) => {
-  const auth = req.headers.authorization
-  if (auth !== `Bearer ${process.env.SECRET_TOKEN}`) {
-    return res.status(401).json({ error: 'Unauthorized' })
-  }
-  next()
-})
-
-// Endpoint MCP
+// 🔐 Endpoint MCP
 app.post('/mcp', async (req, res) => {
+
+  // 🔒 Autenticação via query param
+  const token = req.query.token
+  if (token !== process.env.SECRET_TOKEN) {
+    return res.status(401).json({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32098,
+        message: "Unauthorized"
+      }
+    })
+  }
+
   const { id, method, params } = req.body
 
   try {
+
     // 🔹 Handshake inicial
     if (method === 'initialize') {
       return res.json({
@@ -44,7 +50,7 @@ app.post('/mcp', async (req, res) => {
     // 🔹 Query SQL
     if (method === 'query') {
 
-      const sql = params?.sql
+      let sql = params?.sql
 
       if (!sql || !sql.trim().toLowerCase().startsWith('select')) {
         return res.json({
@@ -55,6 +61,11 @@ app.post('/mcp', async (req, res) => {
             message: "Only SELECT queries are allowed"
           }
         })
+      }
+
+      // 🔐 Limita resultados se não tiver LIMIT
+      if (!sql.toLowerCase().includes('limit')) {
+        sql += ' LIMIT 100'
       }
 
       const result = await pool.query(sql)
